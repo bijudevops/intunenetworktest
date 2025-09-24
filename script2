@@ -1,0 +1,77 @@
+$urls443 = @(
+  # --- Core Autopilot service ---
+  "ztd.dds.microsoft.com",
+  "cs.dds.microsoft.com",
+
+  # --- Intune enrollment / management ---
+  "enterpriseenrollment.manage.microsoft.com",
+  "enrollment.manage.microsoft.com",
+  "manage.microsoft.com",
+  "dm.manage.microsoft.com",
+
+  # --- Entra ID device registration / auth (Hybrid Join) ---
+  "enterpriseregistration.windows.net",
+  "login.microsoftonline.com",
+  "device.login.microsoftonline.com",
+  "autologon.microsoftazuread-sso.com",  # only if Seamless SSO is used
+
+  # --- Identity / account (used in some OOBE flows) ---
+  "login.live.com",
+
+  # --- Delivery Optimization / content (often needed during ESP/app install) ---
+  "cdn.storeedgefd.dsx.mp.microsoft.com",
+
+  # --- Connectivity test host (helps confirm general internet access) ---
+  "www.msftconnecttest.com",
+  "ipv6.msftconnecttest.com",
+
+  # --- Certificate revocation / OCSP (TLS failures if blocked/inspected) ---
+  "crl.microsoft.com",
+  "ocsp.msocsp.com",
+  "ocsp.digicert.com",
+  "crl3.digicert.com",
+  "crl4.digicert.com"
+)
+
+# Some regions/tenants use these alternates—uncomment if relevant in your environment:
+# $urls443 += @(
+#   "enterpriseregistration.windows.net.principals.windows.net", # legacy alias seen in some traces
+#   "device.login.microsoftonline-p.com"                         # occasional alt front door
+# )
+
+# NTP host (UDP/123) for time sync (not TCP-tested here; we only resolve to confirm DNS)
+$ntpHost = "time.windows.com"
+
+# Quick helpers
+function Test-Host443 {
+  param([string]$Name)
+  $dnsOK = $false; $ips = @(); $tcpOK = $false; $tls = $null; $err = $null
+  try { $ips = [System.Net.Dns]::GetHostAddresses($Name) | %{$_.IPAddressToString}; if($ips.Count){$dnsOK=$true} } catch { $err = $_.Exception.Message }
+  try { $tnc = Test-NetConnection -ComputerName $Name -Port 443 -WarningAction SilentlyContinue -InformationLevel Quiet; $tcpOK = [bool]$tnc } catch { $err = ($err ?? "") + ";TNC:" + $_.Exception.Message }
+  # Try a very fast HEAD to catch TLS inspection/cert problems without downloading content
+  try { $resp = Invoke-WebRequest -Uri ("https://"+$Name) -Method Head -UseBasicParsing -TimeoutSec 8; $tls = $resp.StatusCode } catch { $tls = ("ERR:" + $_.Exception.Message) }
+  [PSCustomObject]@{
+    Host = $Name
+    DNS  = if($dnsOK){"OK"}else{"FAIL"}
+    IPs  = ($ips -join ";")
+    TCP443 = if($tcpOK){"OK"}else{"FAIL"}
+    TLS_Head = $tls
+    Note = if($tls -is [string] -and $tls.StartsWith("ERR")){"Check SSL inspection / proxy / CRL reachability"}else{""}
+  }
+}
+
+Write-Host "`n=== Intune/Autopilot/Entra Connectivity Probe (DNS + TCP/443 + TLS HEAD) ===`n" -ForegroundColor Cyan
+$results = $urls443 | ForEach-Object { Test-Host443 $_ }
+$results | Sort-Object Host | Format-Table -AutoSize
+
+# NTP (DNS only here; UDP/123 must be allowed at the edge)
+Write-Host "`nNTP (DNS resolve only; ensure UDP/123 is allowed): $ntpHost" -ForegroundColor Cyan
+try {
+  $ntpIPs = [System.Net.Dns]::GetHostAddresses($ntpHost) | %{$_.IPAddressToString}
+  Write-Host ("Resolved: " + ($ntpIPs -join "; "))
+} catch {
+  Write-Host ("DNS FAIL: " + $_.Exception.Message)
+}
+
+# Exit code hint for automation: nonzero if any core host failed TCP/443
+if(($results | Where-Object {$_.TCP443 -ne "OK"}).Count -gt 0){ exit 2 } else { exit 0 }
