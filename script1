@@ -1,0 +1,17 @@
+$urls = @(
+ "enterpriseenrollment.manage.microsoft.com",
+ "ztd.dds.microsoft.com",
+ "cs.dds.microsoft.com",
+ "enterpriseregistration.windows.net",
+ "device.login.microsoftonline.com"
+)
+
+foreach ($u in $urls) {
+  try {
+    $res = Test-NetConnection $u -Port 443 -WarningAction SilentlyContinue
+    [PSCustomObject]@{FQDN=$u; TcpTest=$res.TcpTestSucceeded; IP=$res.RemoteAddress}
+  } catch {
+    [PSCustomObject]@{FQDN=$u; TcpTest=$false; IP="N/A"}
+  }
+}
+
